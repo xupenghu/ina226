@@ -81,7 +81,18 @@ current : 127.069481 mA,voltage : 2.856504 V ,power : 362.974457 mW
 ```
 typedef int (*i2c_func)(uint8_t addr, uint16_t *data, uint8_t data_len);
 ```
+以STM32 HAL库为例，实现的驱动函数如下：
+```
+static int i2c_read(uint8_t addr, uint16_t *data, uint8_t data_len)
+{
+	return HAL_I2C_Mem_Read(&hi2c1, CHIP_ADDRESS, (uint16_t)addr, 1, (uint8_t *)data, data_len, 100);
+}
 
+static int i2c_write(uint8_t addr, uint16_t *data, uint8_t data_len)
+{
+    return HAL_I2C_Mem_Write(&hi2c1, CHIP_ADDRESS, (uint16_t)addr, 1, (uint8_t *)data, data_len, 100);
+}
+```
 然后调用INA226初始化函数，并将上一步实现的IIC读写函数传入初始化参数中。
 ```
 ret = INA226_init(rt_i2c_read_data, rt_i2c_write_data, device.addr);
