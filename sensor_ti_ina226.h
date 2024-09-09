@@ -6,6 +6,7 @@
  * Change Logs:
  * Date           Author       Notes
  * 2021-01-30     xph    first version
+ * 2024-09-09     cyfs   adaptive
  */
 
 #ifndef _SENSOR_TI_INA226__H
@@ -14,7 +15,7 @@
 #include "rtthread.h"
 #include "board.h"
 #include "rtdevice.h"
-#include <sensor.h>
+
 
 typedef struct _rt_ina226_device_t
 {

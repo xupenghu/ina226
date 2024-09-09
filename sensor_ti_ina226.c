@@ -6,11 +6,24 @@
  * Change Logs:
  * Date           Author       Notes
  * 2021-01-30     xph    first version
+ * 2024-09-09     cyfs   adaptive
  */
 
 #include "sensor_ti_ina226.h"
 #include "ina226.h"
+#if defined(RT_VERSION_CHECK)
+    #if (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
+        #define RT_SIZE_TYPE   rt_ssize_t
+    #else
+        #define RT_SIZE_TYPE   rt_size_t
+    #endif
 
+    #if (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 1, 0))
+        #include "drivers/sensor.h"
+    #else
+        #include "sensor.h"
+    #endif
+#endif
 #include "stdint.h"
 #define DBG_ENABLE
 #define DBG_LEVEL DBG_LOG
@@ -67,17 +80,43 @@ static int rt_i2c_write_data(uint8_t addr, uint16_t *data, uint8_t data_len)
     return RT_EOK;
 }
 
-static rt_size_t ina226_polling_get_data(rt_sensor_t sensor, struct rt_sensor_data *data)
+static RT_SIZE_TYPE ina226_polling_get_data(rt_sensor_t sensor, struct rt_sensor_data *data)
 {
     float current = 0;
-    //  ina226_get_current(&current);
-    data->data.ma = (rt_uint32_t)(current * 1000);
-    data->timestamp = rt_sensor_get_ts();
-    data->type = RT_SENSOR_CLASS_TEMP;
+    
+    if (sensor->info.type == RT_SENSOR_CLASS_VOLTAGE)
+    {
+        if(ina226_get_bus_voltage(&current) != INA226_STATUS_OK)
+        {
+            return 0;
+        }
+        data->data.mv = current * 1000;
+    }
+    else if (sensor->info.type == RT_SENSOR_CLASS_CURRENT)
+    {
+        if(ina226_get_current(&current) != INA226_STATUS_OK)
+        {
+            return 0;
+        }
+        data->data.ma = current;
+    }
+    else if (sensor->info.type == RT_SENSOR_CLASS_POWER)
+    {
+        if(ina226_get_power(&current) != INA226_STATUS_OK)
+        {
+            return 0;
+        }
+        data->data.mv = current;
+    }
+    else
+    {
+        return 0;
+    }
+    
     return 1;
 }
 
-static rt_size_t ina226_fetch_data(struct rt_sensor_device *sensor, void *buf, rt_size_t len)
+static RT_SIZE_TYPE ina226_fetch_data(struct rt_sensor_device *sensor, void *buf, rt_size_t len)
 {
     RT_ASSERT(buf);
 
@@ -112,9 +151,10 @@ static rt_err_t ina226_control(struct rt_sensor_device *sensor, int cmd, void *a
 }
 
 static struct rt_sensor_ops sensor_ops =
-    {
-        ina226_fetch_data,
-        ina226_control};
+{
+    ina226_fetch_data,
+    ina226_control
+};
 
 int rt_hw_ina226_init(const char *name, struct rt_sensor_config *cfg)
 {
@@ -122,7 +162,7 @@ int rt_hw_ina226_init(const char *name, struct rt_sensor_config *cfg)
     rt_memset(&device, 0, sizeof(struct _rt_ina226_device_t));
     if (cfg->intf.user_data)
     {
-        device.addr = (uint8_t)(cfg->intf.user_data);
+        device.addr = (uint8_t)(uintptr_t)(cfg->intf.user_data);
     }
 
     device.bus = (struct rt_i2c_bus_device *)rt_device_find(cfg->intf.dev_name);
@@ -141,32 +181,95 @@ int rt_hw_ina226_init(const char *name, struct rt_sensor_config *cfg)
         LOG_E("ina226 init error. %d", ret);
     }
 
-    rt_sensor_t sensor = RT_NULL;
-    sensor = rt_calloc(1, sizeof(struct rt_sensor_device));
-    if (RT_NULL == sensor)
-    {
-        LOG_E("calloc failed");
-        return -RT_ERROR;
-    }
+    rt_sensor_t sensor_voltage = RT_NULL, sensor_current = RT_NULL, sensor_power = RT_NULL;
+    
+    #ifdef PKG_USING_INA226_VOLTAGE
+        /* voltage sensor register */
+        sensor_voltage = rt_calloc(1, sizeof(struct rt_sensor_device));
+        if(sensor_voltage == RT_NULL)
+        {
+            LOG_E("sensor_voltage calloc failed");
+            return -RT_ERROR;
+        }   
+        sensor_voltage->info.type = RT_SENSOR_CLASS_VOLTAGE;
+        sensor_voltage->info.vendor = RT_SENSOR_VENDOR_TI;
+        sensor_voltage->info.model = "ina226_voltage";
+        sensor_voltage->info.unit = RT_SENSOR_UNIT_MV;
+        sensor_voltage->info.intf_type = RT_SENSOR_INTF_I2C;
+        sensor_voltage->info.range_max = 0xffff;
+        sensor_voltage->info.range_min = 0xffff;
+        sensor_voltage->info.period_min = 100;
+        
+        rt_memcpy(&sensor_voltage->config, cfg, sizeof(struct rt_sensor_config));
+        sensor_voltage->ops = &sensor_ops;
+        
+        ret = rt_hw_sensor_register(sensor_voltage, name, RT_DEVICE_FLAG_RDONLY, &device);
+        if (ret != RT_EOK)
+        {
+            LOG_E("device register err. code: %d", ret);
+            rt_free(sensor_voltage);
+            return -RT_ERROR;
+        }
+    #endif
 
-    sensor->info.type = RT_SENSOR_CLASS_POWER;
-    sensor->info.vendor = RT_SENSOR_VENDOR_TI;
-    sensor->info.model = "ina226";
-    sensor->info.unit = RT_SENSOR_UNIT_MA;
-    sensor->info.intf_type = RT_SENSOR_INTF_I2C;
-    sensor->info.range_max = 0xffff;
-    sensor->info.range_min = 0xffff;
-    sensor->info.period_min = 100;
+    #ifdef PKG_USING_INA226_CURRENT
+        /* current sensor register */
+        sensor_current = rt_calloc(1, sizeof(struct rt_sensor_device));
+        if (sensor_current == RT_NULL)
+        {
+            LOG_E("sensor_current calloc failed");
+            return -RT_ERROR;
+        }
+        sensor_current->info.type = RT_SENSOR_CLASS_CURRENT;
+        sensor_current->info.vendor = RT_SENSOR_VENDOR_TI;
+        sensor_current->info.model = "ina226_current";
+        sensor_current->info.unit = RT_SENSOR_UNIT_MA;
+        sensor_current->info.intf_type = RT_SENSOR_INTF_I2C;
+        sensor_current->info.range_max = 0xffff;
+        sensor_current->info.range_min = 0xffff;
+        sensor_current->info.period_min = 100;
 
-    sensor->config = *cfg;
-    sensor->ops = &sensor_ops;
+        rt_memcpy(&sensor_current->config, cfg, sizeof(struct rt_sensor_config));
+        sensor_current->ops = &sensor_ops;
 
-    ret = rt_hw_sensor_register(sensor, name, RT_DEVICE_FLAG_RDONLY, &device);
-    if (ret != RT_EOK)
-    {
-        LOG_E("device register err. code: %d", ret);
-        rt_free(sensor);
-    }
+        ret = rt_hw_sensor_register(sensor_current, name, RT_DEVICE_FLAG_RDONLY, &device);
+        if (ret != RT_EOK)
+        {
+            LOG_E("device register err. code: %d", ret);
+            rt_free(sensor_current);
+            return -RT_ERROR;
+        }
+    #endif
+    
+    #ifdef PKG_USING_INA226_POWER
+        /* power sensor register */
+        sensor_power = rt_calloc(1, sizeof(struct rt_sensor_device));
+        if (sensor_power == RT_NULL)
+        {
+            LOG_E("sensor_power calloc failed");
+            return -RT_ERROR;
+        }
+        sensor_power->info.type = RT_SENSOR_CLASS_POWER;
+        sensor_power->info.vendor = RT_SENSOR_VENDOR_TI;
+        sensor_power->info.model = "ina226_power";
+        sensor_power->info.unit = RT_SENSOR_UNIT_MW;
+        sensor_power->info.intf_type = RT_SENSOR_INTF_I2C;
+        sensor_power->info.range_max = 0xffff;
+        sensor_power->info.range_min = 0xffff;
+        sensor_power->info.period_min = 100;
 
+        rt_memcpy(&sensor_power->config, cfg, sizeof(struct rt_sensor_config));
+        sensor_power->ops = &sensor_ops;
+
+        ret = rt_hw_sensor_register(sensor_power, name, RT_DEVICE_FLAG_RDONLY, &device);
+        if (ret != RT_EOK)
+        {
+            LOG_E("device register err. code: %d", ret);
+            rt_free(sensor_power);
+            return -RT_ERROR;
+        }
+    #endif
+
+    LOG_I("ina226 sensor init success.");
     return RT_EOK;
 }
