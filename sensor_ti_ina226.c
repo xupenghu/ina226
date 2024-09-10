@@ -11,19 +11,7 @@
 
 #include "sensor_ti_ina226.h"
 #include "ina226.h"
-#if defined(RT_VERSION_CHECK)
-    #if (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 0, 2))
-        #define RT_SIZE_TYPE   rt_ssize_t
-    #else
-        #define RT_SIZE_TYPE   rt_size_t
-    #endif
 
-    #if (RTTHREAD_VERSION >= RT_VERSION_CHECK(5, 1, 0))
-        #include "drivers/sensor.h"
-    #else
-        #include "sensor.h"
-    #endif
-#endif
 #include "stdint.h"
 #define DBG_ENABLE
 #define DBG_LEVEL DBG_LOG
